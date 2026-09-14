@@ -1,3 +1,8 @@
+import csv
+import io
+import re
+from datetime import date
+
 import streamlit as st
 
 st.set_page_config(
@@ -29,6 +34,36 @@ if "study_step" not in st.session_state:
     st.session_state.study_step = 0
 if "generated_content" not in st.session_state:
     st.session_state.generated_content = {}
+if "xp" not in st.session_state:
+    st.session_state.xp = 0
+if "streak" not in st.session_state:
+    st.session_state.streak = 0
+if "concepts_mastered" not in st.session_state:
+    st.session_state.concepts_mastered = set()
+if "weak_topics" not in st.session_state:
+    st.session_state.weak_topics = []
+if "achievements" not in st.session_state:
+    st.session_state.achievements = set()
+if "learning_pack" not in st.session_state:
+    st.session_state.learning_pack = None
+if "flashcards" not in st.session_state:
+    st.session_state.flashcards = []
+if "flashcard_index" not in st.session_state:
+    st.session_state.flashcard_index = 0
+if "flashcard_revealed" not in st.session_state:
+    st.session_state.flashcard_revealed = False
+if "socratic_step" not in st.session_state:
+    st.session_state.socratic_step = 0
+if "socratic_topic" not in st.session_state:
+    st.session_state.socratic_topic = ""
+if "challenge_complete" not in st.session_state:
+    st.session_state.challenge_complete = False
+if "attendance_students" not in st.session_state:
+    st.session_state.attendance_students = []
+if "attendance_records" not in st.session_state:
+    st.session_state.attendance_records = []
+if "attendance_last_saved" not in st.session_state:
+    st.session_state.attendance_last_saved = None
 
 
 def go_to(page):
@@ -59,6 +94,13 @@ def content_actions(title, content, category):
             st.success("Saved to your library.")
     with action_columns[2]:
         st.code(content, language=None)
+    with st.expander("Remix this"):
+        remix_format = st.selectbox("Turn this into", ["Quiz", "Flashcards", "Study plan", "Exam answer"], key=f"remix_format_{category}_{title}")
+        if st.button("Create remix", key=f"remix_{category}_{title}", use_container_width=True):
+            remixed = remix_text(content, remix_format)
+            st.session_state.generated_content[f"remix_{category}"] = remixed
+            st.markdown(remixed)
+            st.download_button("Download remix", remixed, file_name=f"{title.lower().replace(' ', '-')}-remix.txt", key=f"download_remix_{category}_{title}")
 
 
 def explain_topic(topic, level):
@@ -87,61 +129,125 @@ def build_quiz(topic, difficulty, count):
 
 def record_quiz_result(topic, score, total):
     st.session_state.quiz_history.append({"topic": topic, "score": score, "total": total})
+    if score < total:
+        if topic not in st.session_state.weak_topics:
+            st.session_state.weak_topics.append(topic)
+    else:
+        st.session_state.concepts_mastered.add(topic)
+    st.session_state.xp += score * 20
+    if len(st.session_state.quiz_history) == 1:
+        st.session_state.achievements.add("First Quiz")
+    if score == total:
+        st.session_state.achievements.add("Perfect Score")
+    if score >= 5:
+        st.session_state.achievements.add("5 Questions Correct")
+
+
+def make_learning_pack(topic, source):
+    notes = source.strip() or f"Core notes about {topic} and its most important ideas."
+    summary = f"{topic} becomes clearer when you connect its definition, its main relationships, and one real-world example. Use the notes as a starting point, then explain the idea without looking."
+    return {
+        "topic": topic,
+        "source": notes,
+        "summary": summary,
+        "key_concepts": [f"Definition and purpose of {topic}", f"The main relationship inside {topic}", f"A practical example of {topic}"],
+        "flashcards": [(f"What is the central idea of {topic}?", f"It is the definition, purpose, and key relationship that make {topic} useful."), (f"How would you apply {topic}?", "Describe the situation, identify the changing parts, and explain the result."), (f"How can you check your understanding of {topic}?", "Explain it in your own words and solve one new example.")],
+        "study_plan": ["5 min - Read the summary and define the vocabulary", "10 min - Work through the key relationship and example", "10 min - Test yourself with the quiz", "5 min - Review weak points and explain the topic aloud"],
+    }
+
+
+def remix_text(content, format_name):
+    if format_name == "Quiz":
+        return f"# Remix Quiz\n\n1. What is the central idea?\n2. Give one example.\n3. Explain the most important relationship in your own words.\n\nSource:\n{content}"
+    if format_name == "Flashcards":
+        return f"# Remix Flashcards\n\nQ: What is the main idea?\nA: Review the definition and purpose.\n\nQ: How would you use it?\nA: Connect it to a new example.\n\nSource:\n{content}"
+    if format_name == "Exam answer":
+        return f"# Exam-ready answer\n\n{content}\n\nUse the structure: definition, explanation, example, conclusion."
+    return f"# Study plan\n\n1. Identify the key idea.\n2. Review the example.\n3. Answer three practice questions.\n4. Revisit the part that felt least certain.\n\nSource:\n{content}"
+
+
+def parse_student_list(pasted_names, uploaded_csv):
+    students = []
+    if uploaded_csv is not None:
+        rows = csv.DictReader(io.StringIO(uploaded_csv.getvalue().decode("utf-8-sig")))
+        for index, row in enumerate(rows, 1):
+            normalized = {str(key).strip().lower(): str(value).strip() for key, value in row.items() if key}
+            name = normalized.get("name") or normalized.get("student name") or next(iter(normalized.values()), "")
+            roll = normalized.get("roll no") or normalized.get("roll") or str(index)
+            if name:
+                students.append({"roll": roll, "name": name, "present": True})
+    else:
+        for index, raw_line in enumerate(pasted_names.splitlines(), 1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            match = re.match(r"^(\d+)\s*[.)-]\s*(.+)$", line)
+            if match:
+                roll, name = match.groups()
+            else:
+                roll, name = str(index), line
+            students.append({"roll": roll.strip(), "name": name.strip(), "present": True})
+    return students
+
+
+def attendance_csv(record):
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Institution", "Zyphron Classroom"])
+    writer.writerow(["Class", record["class_name"]])
+    writer.writerow(["Division", record["division"]])
+    writer.writerow(["Subject", record["subject"]])
+    writer.writerow(["Date", record["date"]])
+    writer.writerow(["Period", record["period"]])
+    writer.writerow([])
+    writer.writerow(["Roll number", "Student name", "Status"])
+    for student in record["students"]:
+        writer.writerow([student["roll"], student["name"], "Present" if student["present"] else "Absent"])
+    writer.writerow([])
+    writer.writerow(["Total present", record["present_count"]])
+    writer.writerow(["Total absent", record["absent_count"]])
+    writer.writerow(["Attendance percentage", f"{record['percentage']:.1f}%"])
+    return output.getvalue()
+
+
+def toggle_attendance(roll):
+    for student in st.session_state.attendance_students:
+        if student["roll"] == roll:
+            student["present"] = not student["present"]
+            break
+
+
+def attendance_record(date_value, class_name, division, subject, period):
+    students = [dict(student) for student in st.session_state.attendance_students]
+    present_count = sum(student["present"] for student in students)
+    absent_count = len(students) - present_count
+    return {"date": date_value.isoformat(), "class_name": class_name, "division": division, "subject": subject, "period": period, "students": students, "present_count": present_count, "absent_count": absent_count, "percentage": (present_count / len(students) * 100) if students else 0}
 
 
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Mono:wght@400;700&display=swap');
 
     :root {
-        --ink: #f8f5ff;
-        --muted: #c9bfe1;
-        --lavender: #d9c7ff;
-        --violet: #9c6dff;
-        --purple: #7139d7;
-        --deep: #120a2b;
-        --glass: rgba(255, 255, 255, 0.09);
-        --line: rgba(232, 220, 255, 0.18);
+        --ink: #f2edda;
+        --muted: #a9b3a2;
+        --lavender: #f2bd5d;
+        --violet: #68d391;
+        --purple: #68d391;
+        --deep: #0b0f0e;
+        --glass: #111917;
+        --line: #3c5548;
+        --cyan: #82d9df;
+        --danger: #ef7168;
     }
 
     .stApp {
         min-height: 100vh;
         color: var(--ink);
-        background:
-            radial-gradient(circle at 14% 14%, rgba(155, 93, 255, 0.34), transparent 27%),
-            radial-gradient(circle at 86% 8%, rgba(112, 214, 255, 0.16), transparent 24%),
-            radial-gradient(circle at 72% 76%, rgba(126, 56, 227, 0.23), transparent 30%),
-            linear-gradient(135deg, #0e0822 0%, #1c0e3e 47%, #0b0920 100%);
-        font-family: 'DM Sans', sans-serif;
-    }
-
-    .stApp:before,
-    .stApp:after {
-        content: '';
-        position: fixed;
-        pointer-events: none;
-        z-index: 0;
-    }
-
-    .stApp:before {
-        width: 420px;
-        height: 420px;
-        top: -170px;
-        left: 12%;
-        border: 1px solid rgba(224, 208, 255, 0.16);
-        transform: rotate(34deg) skewX(-15deg);
-        box-shadow: 0 0 70px rgba(166, 117, 255, 0.12), inset 0 0 70px rgba(208, 193, 255, 0.06);
-    }
-
-    .stApp:after {
-        width: 260px;
-        height: 260px;
-        right: 9%;
-        bottom: 8%;
-        border: 1px solid rgba(162, 220, 255, 0.12);
-        transform: rotate(45deg);
-        box-shadow: 0 0 55px rgba(107, 181, 255, 0.1);
+        background-color: #0b0f0e;
+        background-image: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.018) 0, rgba(255, 255, 255, 0.018) 1px, transparent 1px, transparent 4px);
+        font-family: 'Space Mono', monospace;
     }
 
     [data-testid="stHeader"] {
@@ -155,57 +261,12 @@ st.markdown(
         padding: 1.4rem clamp(1rem, 3vw, 2.2rem) 2rem;
     }
 
-    .brand-bar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 1rem;
-        margin-bottom: 3rem;
-    }
-
-    .brand {
-        display: flex;
-        align-items: center;
-        gap: 0.75rem;
-        color: var(--ink);
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: 1.1rem;
-        font-weight: 700;
-        letter-spacing: 0.01em;
-    }
-
-    .brand-mark {
-        display: grid;
-        width: 2.25rem;
-        height: 2.25rem;
-        place-items: center;
-        border: 1px solid rgba(255, 255, 255, 0.38);
-        border-radius: 0.75rem;
-        color: #201044;
-        background: linear-gradient(135deg, #f2eaff 0%, #b98bff 48%, #7b56e5 100%);
-        box-shadow: 0 0 24px rgba(179, 129, 255, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.8);
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: 1.1rem;
-    }
-
-    .language-pill {
-        padding: 0.55rem 0.95rem;
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        color: var(--muted);
-        background: rgba(255, 255, 255, 0.06);
-        font-size: 0.78rem;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        backdrop-filter: blur(16px);
-    }
-
     .hero {
         position: relative;
         max-width: 830px;
         margin: 0 auto 6.2rem;
         text-align: center;
-        animation: rise 0.8s ease-out both;
+        animation: rise 260ms ease-out both;
     }
 
     .eyebrow {
@@ -224,32 +285,29 @@ st.markdown(
         content: '';
         width: 2.2rem;
         height: 1px;
-        background: linear-gradient(90deg, transparent, var(--lavender));
+        background: var(--lavender);
     }
 
     .hero h1 {
         margin: 0;
         color: var(--ink);
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: clamp(3.7rem, 9vw, 7.8rem);
+        font-family: 'Press Start 2P', monospace;
+        font-size: clamp(2.1rem, 6vw, 5rem);
         font-weight: 700;
         letter-spacing: -0.06em;
         line-height: 0.96;
-        text-shadow: 0 0 48px rgba(192, 155, 255, 0.35);
+        text-shadow: 3px 3px 0 #263a30;
     }
 
     .hero h1 span {
-        color: transparent;
-        background: linear-gradient(100deg, #f9f4ff 12%, #c9a7ff 52%, #8fddff 100%);
-        -webkit-background-clip: text;
-        background-clip: text;
+        color: var(--lavender);
     }
 
     .hero h2 {
         margin: 1.5rem 0 1rem;
         color: #e5d9fa;
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: clamp(1.15rem, 2.5vw, 1.65rem);
+        font-family: 'Space Mono', monospace;
+        font-size: clamp(1.05rem, 2.5vw, 1.65rem);
         font-weight: 500;
     }
 
@@ -261,32 +319,22 @@ st.markdown(
         line-height: 1.75;
     }
 
-    .hero:after {
-        content: '';
-        position: absolute;
-        width: 180px;
-        height: 180px;
-        top: 15%;
-        left: 50%;
-        z-index: -1;
-        border: 1px solid rgba(231, 219, 255, 0.08);
-        transform: translateX(-50%) rotate(45deg);
-        box-shadow: 0 0 45px rgba(173, 125, 255, 0.18);
-    }
+    .hero:after { display: none; }
 
     .stButton > button {
         width: 100%;
         min-height: 2.8rem;
         padding: 0.65rem 1rem;
         border: 1px solid rgba(233, 220, 255, 0.24);
-        border-radius: 0.8rem;
+        border-radius: 0;
         color: #fff;
-        background: rgba(255, 255, 255, 0.08);
-        font-family: 'DM Sans', sans-serif;
+        background: #16221c;
+        font-family: 'Space Mono', monospace;
+        font-size: 0.78rem;
+        letter-spacing: 0.02em;
         font-weight: 600;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.15);
-        backdrop-filter: blur(15px);
-        transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+        box-shadow: 3px 3px 0 #050706;
+        transition: border-color 100ms ease, background 100ms ease, transform 100ms ease, box-shadow 100ms ease;
     }
 
     .stButton > button p {
@@ -303,10 +351,22 @@ st.markdown(
     }
 
     .stButton > button:hover {
-        border-color: rgba(231, 214, 255, 0.68);
-        background: rgba(183, 134, 255, 0.2);
-        box-shadow: 0 0 28px rgba(153, 99, 255, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.24);
-        transform: translateY(-2px);
+        border-color: var(--lavender);
+        background: #213127;
+    }
+
+    .stButton > button:active {
+        transform: translate(3px, 3px);
+        box-shadow: none;
+    }
+
+    .stButton > button:focus-visible,
+    .stTextInput input:focus-visible,
+    .stTextArea textarea:focus-visible,
+    [data-baseweb="select"] > div:focus-within,
+    [data-baseweb="tab"]:focus-visible {
+        outline: 2px solid var(--lavender);
+        outline-offset: 2px;
     }
 
     .cta-row {
@@ -317,9 +377,9 @@ st.markdown(
     .section-heading {
         margin: 0 0 1.8rem;
         color: var(--ink);
-        font-family: 'Space Grotesk', sans-serif;
+        font-family: 'Press Start 2P', monospace;
         font-size: clamp(1.7rem, 3vw, 2.35rem);
-        letter-spacing: -0.04em;
+        letter-spacing: 0.02em;
     }
 
     .section-heading span {
@@ -339,29 +399,18 @@ st.markdown(
         overflow: hidden;
         padding: 1.55rem;
         border: 1px solid var(--line);
-        border-radius: 1.1rem;
-        background: linear-gradient(145deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.045));
-        box-shadow: 0 18px 45px rgba(3, 0, 16, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.14);
-        backdrop-filter: blur(18px);
-        transition: transform 220ms ease, border-color 220ms ease, background 220ms ease;
+        border-radius: 0;
+        background: var(--glass);
+        box-shadow: 4px 4px 0 #050706;
+        transition: border-color 140ms ease, background 140ms ease;
     }
 
     .glass-card:hover {
-        border-color: rgba(223, 204, 255, 0.42);
-        background: linear-gradient(145deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.065));
-        transform: translateY(-6px);
+        border-color: var(--violet);
+        background: #17251d;
     }
 
-    .glass-card:after {
-        content: '';
-        position: absolute;
-        width: 90px;
-        height: 90px;
-        top: -42px;
-        right: -34px;
-        border: 1px solid rgba(233, 224, 255, 0.15);
-        transform: rotate(45deg);
-    }
+    .glass-card:after { display: none; }
 
     .card-number {
         display: inline-grid;
@@ -370,9 +419,9 @@ st.markdown(
         margin-bottom: 1.1rem;
         place-items: center;
         border: 1px solid rgba(218, 199, 255, 0.3);
-        border-radius: 0.65rem;
+        border-radius: 0;
         color: var(--lavender);
-        background: rgba(157, 108, 255, 0.16);
+        background: #20382a;
         font-size: 0.78rem;
         font-weight: 700;
     }
@@ -380,7 +429,8 @@ st.markdown(
     .glass-card h3 {
         margin: 0 0 0.55rem;
         color: #f5efff;
-        font-family: 'Space Grotesk', sans-serif;
+        font-family: 'Press Start 2P', monospace;
+        font-size: 0.8rem;
         font-size: 1.05rem;
     }
 
@@ -393,22 +443,22 @@ st.markdown(
 
     .section-block {
         margin-bottom: 6rem;
-        animation: rise 0.8s 0.18s ease-out both;
+        animation: rise 260ms ease-out both;
     }
 
     .solution-block {
         padding: 2.7rem 0 0;
         border-top: 1px solid rgba(219, 198, 255, 0.12);
-        animation-delay: 0.3s;
+        animation-delay: 60ms;
     }
 
     .mode-note {
         margin: 1.2rem 0 0;
         padding: 0.85rem 1rem;
         border: 1px solid rgba(208, 190, 255, 0.2);
-        border-radius: 0.75rem;
+        border-radius: 0;
         color: var(--lavender);
-        background: rgba(127, 75, 219, 0.12);
+        background: #1b2b22;
         text-align: center;
         font-size: 0.88rem;
     }
@@ -423,19 +473,19 @@ st.markdown(
     }
 
     .nav-shell {
-        margin: -1rem 0 2.5rem;
+        margin: 0 0 2.5rem;
         padding: 0.55rem;
         border: 1px solid var(--line);
-        border-radius: 1rem;
-        background: rgba(255, 255, 255, 0.06);
-        box-shadow: 0 14px 35px rgba(3, 0, 16, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-        backdrop-filter: blur(18px);
+        border-radius: 0;
+        background: #111917;
+        box-shadow: 4px 4px 0 #050706;
     }
 
     .nav-caption {
         padding: 0.25rem 0.7rem 0.35rem;
         color: #a99cc4;
-        font-size: 0.68rem;
+        font-family: 'Press Start 2P', monospace;
+        font-size: 0.58rem;
         font-weight: 700;
         letter-spacing: 0.14em;
         text-transform: uppercase;
@@ -444,9 +494,9 @@ st.markdown(
     .page-title {
         margin: 0 0 0.5rem;
         color: var(--ink);
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: clamp(2rem, 5vw, 3.5rem);
-        letter-spacing: -0.05em;
+        font-family: 'Press Start 2P', monospace;
+        font-size: clamp(1.35rem, 3vw, 2.4rem);
+        letter-spacing: 0.02em;
     }
 
     .page-intro {
@@ -460,10 +510,9 @@ st.markdown(
         margin-bottom: 2.5rem;
         padding: clamp(1rem, 2.5vw, 1.7rem);
         border: 1px solid var(--line);
-        border-radius: 1.1rem;
-        background: rgba(255, 255, 255, 0.045);
-        box-shadow: 0 14px 35px rgba(3, 0, 16, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-        backdrop-filter: blur(15px);
+        border-radius: 0;
+        background: #0f1714;
+        box-shadow: 4px 4px 0 #050706;
     }
 
     .dashboard-shell [data-baseweb="tab-list"] {
@@ -481,7 +530,8 @@ st.markdown(
     .tool-header {
         margin: 0.5rem 0 1.1rem;
         color: var(--ink);
-        font-family: 'Space Grotesk', sans-serif;
+        font-family: 'Press Start 2P', monospace;
+        font-size: 0.8rem;
         font-size: 1.35rem;
     }
 
@@ -494,8 +544,8 @@ st.markdown(
         margin-bottom: 1rem;
         padding: 1rem 1.15rem;
         border: 1px solid var(--line);
-        border-radius: 0.9rem;
-        background: rgba(255, 255, 255, 0.07);
+        border-radius: 0;
+        background: #111917;
         color: var(--muted);
         line-height: 1.65;
         backdrop-filter: blur(16px);
@@ -524,32 +574,30 @@ st.markdown(
         to { opacity: 1; transform: translateY(0); }
     }
 
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+            animation-duration: 1ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 1ms !important;
+            scroll-behavior: auto !important;
+        }
+    }
+
     @media (max-width: 640px) {
         .block-container { padding: 1rem 0.8rem 1.5rem; }
-        .brand-bar { margin-bottom: 2rem; }
-        .language-pill { font-size: 0.68rem; }
         .hero { margin-bottom: 4.4rem; }
-        .hero h1 { font-size: clamp(3.2rem, 17vw, 5.2rem); }
+        .hero h1 { font-size: clamp(1.35rem, 7.8vw, 2rem); line-height: 1.35; white-space: nowrap; }
+        .hero h2 { font-size: 0.95rem; line-height: 1.35; }
         .hero p { font-size: 0.92rem; }
         .section-block { margin-bottom: 4.4rem; }
         .glass-card { min-height: 0; }
         .nav-shell { margin-top: -0.8rem; margin-bottom: 1.8rem; padding: 0.35rem; }
         .nav-caption { padding-left: 0.4rem; }
-        .nav-shell .stButton > button { min-height: 2.6rem; padding: 0.5rem 0.35rem; font-size: 0.78rem; }
+        .nav-shell .stButton > button { min-height: 2.7rem; padding: 0.5rem 0.3rem; font-size: 0.72rem; }
         .dashboard-shell { padding: 0.85rem; }
         .dashboard-shell [data-baseweb="tab"] { flex: 1 1 45%; text-align: center; }
     }
     </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-st.markdown(
-    """
-    <div class="brand-bar">
-        <div class="brand"><span class="brand-mark">Z</span> Zyphron</div>
-        <div class="language-pill">English only</div>
-    </div>
     """,
     unsafe_allow_html=True,
 )
@@ -584,6 +632,302 @@ def feature_card(number, title, description, action_label, target_page):
         unsafe_allow_html=True,
     )
     st.button(action_label, key=f"action_{target_page}_{number}", use_container_width=True, on_click=go_to, args=(target_page,))
+
+
+def learning_status():
+    metrics = st.columns(4, gap="small")
+    metrics[0].metric("⚡ XP", st.session_state.xp)
+    metrics[1].metric("🔥 Streak", f"{st.session_state.streak} session" if st.session_state.streak == 1 else f"{st.session_state.streak} sessions")
+    metrics[2].metric("🧠 Mastered", len(st.session_state.concepts_mastered))
+    metrics[3].metric("🎯 Weak areas", len(st.session_state.weak_topics))
+    if st.session_state.weak_topics:
+        st.markdown(f'<div class="flow-note"><strong>Recommended next step:</strong> Review {st.session_state.weak_topics[-1]}, then try three easier targeted questions.</div>', unsafe_allow_html=True)
+    if st.session_state.achievements:
+        st.caption("Achievements: " + " · ".join(sorted(st.session_state.achievements)))
+
+
+def socratic_response(topic, step):
+    prompts = [
+        f"Let's investigate {topic}. What do you already think is causing or controlling it?",
+        f"Good starting point. For {topic}, what force, rule, or relationship might explain that observation?",
+        f"Now connect your idea to an example. What would happen if one part of {topic} changed?",
+    ]
+    return prompts[min(step, len(prompts) - 1)]
+
+
+def learning_pack_page():
+    st.markdown('<h2 class="tool-header">📦 Turn Anything Into Learning</h2>', unsafe_allow_html=True)
+    st.caption("Paste notes once. Zyphron turns them into a summary, key concepts, flashcards, quiz, and study plan.")
+    topic = st.text_input("Topic", placeholder="Newton's Laws", key="pack_topic")
+    source = st.text_area("Paste your notes or study text", placeholder="Paste a paragraph, class notes, or a textbook excerpt.", height=140, key="pack_source")
+    if st.button("Generate Learning Pack", type="primary", use_container_width=True, key="generate_pack"):
+        if not topic.strip():
+            st.warning("Add a topic so the learning pack can be organized.")
+        else:
+            st.session_state.learning_pack = make_learning_pack(topic.strip(), source)
+            st.session_state.flashcards = st.session_state.learning_pack["flashcards"]
+            st.session_state.flashcard_index = 0
+            st.session_state.flashcard_revealed = False
+            st.session_state.xp += 10
+            st.session_state.streak = max(1, st.session_state.streak + 1)
+    pack = st.session_state.learning_pack
+    if not pack:
+        st.info("Your generated learning pack will appear here.")
+        return
+    pack_tabs = st.tabs(["📖 Summary", "🧠 Key concepts", "📝 Quiz", "🃏 Flashcards", "⏱️ Study plan"])
+    with pack_tabs[0]:
+        st.markdown(f"### {pack['topic']}\n\n{pack['summary']}")
+        content_actions(f"{pack['topic']} learning summary", pack["summary"], "learning-pack-summary")
+    with pack_tabs[1]:
+        for concept in pack["key_concepts"]:
+            st.markdown(f"- {concept}")
+    with pack_tabs[2]:
+        st.markdown("### Practice the pack")
+        for index, question in enumerate(build_quiz(pack["topic"], "Beginner", 3)):
+            st.markdown(f"**{index + 1}. {question['question']}**")
+    with pack_tabs[3]:
+        flashcard_page(compact=True)
+    with pack_tabs[4]:
+        st.markdown("\n".join(f"- {step}" for step in pack["study_plan"]))
+
+
+def flashcard_page(compact=False):
+    st.markdown('<h2 class="tool-header">🃏 Flashcards</h2>', unsafe_allow_html=True)
+    key_prefix = "pack_" if compact else "main_"
+    if not st.session_state.flashcards:
+        st.info("Generate a Learning Pack to create flashcards, or start with a topic below.")
+        topic = st.text_input("Flashcard topic", placeholder="Inertia", key=f"{key_prefix}flashcard_topic")
+        if st.button("Create Flashcards", use_container_width=True, key=f"{key_prefix}create_flashcards") and topic.strip():
+            st.session_state.flashcards = make_learning_pack(topic.strip(), "")["flashcards"]
+            st.session_state.flashcard_index = 0
+            st.session_state.flashcard_revealed = False
+            st.rerun()
+        return
+    question, answer = st.session_state.flashcards[st.session_state.flashcard_index]
+    st.markdown(f'<div class="glass-card flashcard"><div class="card-number">{st.session_state.flashcard_index + 1}/{len(st.session_state.flashcards)}</div><h3>{question}</h3></div>', unsafe_allow_html=True)
+    if st.session_state.flashcard_revealed:
+        st.markdown(f'<div class="flow-note"><strong>Answer</strong><br>{answer}</div>', unsafe_allow_html=True)
+        known_col, revise_col = st.columns(2, gap="small")
+        with known_col:
+            if st.button("I knew it", use_container_width=True, key=f"{key_prefix}flash_known"):
+                st.session_state.xp += 10
+                st.session_state.flashcard_revealed = False
+                st.session_state.flashcard_index = (st.session_state.flashcard_index + 1) % len(st.session_state.flashcards)
+                st.rerun()
+        with revise_col:
+            if st.button("Need revision", use_container_width=True, key=f"{key_prefix}flash_revision"):
+                st.session_state.weak_topics.append(question)
+                st.session_state.flashcard_revealed = False
+                st.session_state.flashcard_index = (st.session_state.flashcard_index + 1) % len(st.session_state.flashcards)
+                st.rerun()
+    elif st.button("Reveal", type="primary", use_container_width=True, key=f"{key_prefix}flash_reveal"):
+        st.session_state.flashcard_revealed = True
+        st.rerun()
+    control_columns = st.columns(3, gap="small")
+    with control_columns[0]:
+        if st.button("Previous", use_container_width=True, key=f"{key_prefix}flash_previous"):
+            st.session_state.flashcard_index = (st.session_state.flashcard_index - 1) % len(st.session_state.flashcards)
+            st.session_state.flashcard_revealed = False
+            st.rerun()
+    with control_columns[1]:
+        if st.button("Next", use_container_width=True, key=f"{key_prefix}flash_next"):
+            st.session_state.flashcard_index = (st.session_state.flashcard_index + 1) % len(st.session_state.flashcards)
+            st.session_state.flashcard_revealed = False
+            st.rerun()
+    with control_columns[2]:
+        if st.button("Restart", use_container_width=True, key=f"{key_prefix}flash_restart"):
+            st.session_state.flashcard_index = 0
+            st.session_state.flashcard_revealed = False
+            st.rerun()
+
+
+def knowledge_map_page():
+    st.markdown('<h2 class="tool-header">🗺️ Knowledge Map</h2>', unsafe_allow_html=True)
+    topic = st.selectbox("Choose a topic", ["Newton's Laws", "Photosynthesis", "Fractions", "The Water Cycle"], key="map_topic")
+    relationships = {
+        "Newton's Laws": ("Force and Motion", "Newton's Laws", "Momentum", "Energy"),
+        "Photosynthesis": ("Cells and Light", "Photosynthesis", "Plant Respiration", "Food Chains"),
+        "Fractions": ("Whole Numbers", "Fractions", "Ratios", "Percentages"),
+        "The Water Cycle": ("States of Matter", "The Water Cycle", "Weather", "Climate"),
+    }
+    prerequisite, current, related, next_topic = relationships[topic]
+    map_columns = st.columns(4, gap="small")
+    for column, label, value in zip(map_columns, ["Prerequisite", "Current focus", "Related", "Recommended next"], relationships[topic]):
+        with column:
+            st.markdown(f'<article class="glass-card map-node"><div class="card-number">→</div><h3>{label}</h3><p>{value}</p></article>', unsafe_allow_html=True)
+
+
+def quick_challenge_page():
+    st.markdown('<h2 class="tool-header">⚡ Quick Challenge</h2>', unsafe_allow_html=True)
+    st.markdown("**A 2kg object experiences a force of 10N. What is its acceleration?**")
+    answer = st.number_input("Your answer in m/s²", min_value=0.0, step=0.5, key="challenge_answer")
+    if st.button("Check answer", type="primary", use_container_width=True, key="check_challenge"):
+        if answer == 5:
+            st.session_state.challenge_complete = True
+            st.session_state.xp += 20
+            st.session_state.achievements.add("Quick Challenge")
+            st.success("Correct! +20 XP")
+        else:
+            st.warning("Not quite. Use acceleration = force ÷ mass.")
+    if st.session_state.challenge_complete:
+        st.caption("Challenge completed in this session.")
+
+
+def quick_attendance_page():
+    st.markdown('<h2 class="tool-header">📋 Quick Attendance</h2>', unsafe_allow_html=True)
+    st.caption("Take attendance in seconds. Everyone starts Present, so you only need to tap absent students.")
+    details = st.columns([1.2, 1.1, 0.8, 1.2, 0.8], gap="small")
+    with details[0]:
+        attendance_date = st.date_input("Date", value=date.today(), key="attendance_date")
+    with details[1]:
+        class_name = st.text_input("Class", placeholder="Grade 8", key="attendance_class")
+    with details[2]:
+        division = st.text_input("Division", placeholder="A", key="attendance_division")
+    with details[3]:
+        subject = st.text_input("Subject", placeholder="Mathematics", key="attendance_subject")
+    with details[4]:
+        period = st.text_input("Period", placeholder="1", key="attendance_period")
+
+    input_tabs = st.tabs(["Paste names", "Upload CSV"])
+    with input_tabs[0]:
+        pasted_names = st.text_area("Student list", placeholder="1. Rahul\n2. Anu\n3. Adithya", height=125, key="attendance_pasted_names")
+        if st.button("Load Class", type="primary", use_container_width=True, key="load_attendance_names"):
+            students = parse_student_list(pasted_names, None)
+            if not students:
+                st.warning("Paste at least one student name.")
+            else:
+                st.session_state.attendance_students = students
+                st.session_state.attendance_last_saved = None
+                st.rerun()
+    with input_tabs[1]:
+        uploaded_csv = st.file_uploader("CSV with Roll No and Name", type=["csv"], key="attendance_csv_upload")
+        if st.button("Load CSV Class", type="primary", use_container_width=True, key="load_attendance_csv"):
+            if uploaded_csv is None:
+                st.warning("Choose a CSV file first.")
+            else:
+                students = parse_student_list("", uploaded_csv)
+                if not students:
+                    st.warning("The CSV needs at least one student name.")
+                else:
+                    st.session_state.attendance_students = students
+                    st.session_state.attendance_last_saved = None
+                    st.rerun()
+
+    students = st.session_state.attendance_students
+    if not students:
+        st.info("Load a class list to begin. Every student will start as Present.")
+        return
+
+    st.markdown(f"### Attendance · {len(students)} students")
+    action_columns = st.columns(3, gap="small")
+    with action_columns[0]:
+        if st.button("Mark All Present", use_container_width=True, key="attendance_all_present"):
+            for student in students:
+                student["present"] = True
+            st.rerun()
+    with action_columns[1]:
+        if st.button("Clear Attendance", use_container_width=True, key="attendance_clear"):
+            for student in students:
+                student["present"] = True
+            st.rerun()
+    with action_columns[2]:
+        save_attendance = st.button("Save Attendance", type="primary", use_container_width=True, key="save_attendance")
+
+    for student in students:
+        row_columns = st.columns([0.65, 3.2, 1.45], gap="small")
+        with row_columns[0]:
+            st.markdown(f"**{student['roll']}**")
+        with row_columns[1]:
+            st.markdown(f"**{student['name']}**")
+        with row_columns[2]:
+            status = "Present" if student["present"] else "Absent"
+            st.button(status, key=f"attendance_toggle_{student['roll']}", use_container_width=True, on_click=toggle_attendance, args=(student["roll"],))
+
+    if save_attendance:
+        if not class_name.strip() or not subject.strip():
+            st.warning("Add the class and subject before saving attendance.")
+        else:
+            record = attendance_record(attendance_date, class_name.strip(), division.strip(), subject.strip(), period.strip())
+            st.session_state.attendance_records.append(record)
+            st.session_state.attendance_last_saved = record
+            st.session_state.xp += 10
+            st.success("Attendance saved.")
+
+    record = st.session_state.attendance_last_saved
+    if record:
+        absent_students = [student for student in record["students"] if not student["present"]]
+        st.markdown("### Attendance Summary")
+        summary_columns = st.columns(4, gap="small")
+        summary_columns[0].metric("Total students", len(record["students"]))
+        summary_columns[1].metric("Present", record["present_count"])
+        summary_columns[2].metric("Absent", record["absent_count"])
+        summary_columns[3].metric("Attendance", f"{record['percentage']:.1f}%")
+        if absent_students:
+            st.markdown("#### 📋 Copy Absent List")
+            absent_text = f"Absent Students – {date.fromisoformat(record['date']).strftime('%d %B %Y')}\n\n" + "\n".join(f"{student['roll']} – {student['name']}" for student in absent_students)
+            st.code(absent_text, language=None)
+        else:
+            st.success("Everyone is present.")
+        sheet = attendance_csv(record)
+        st.download_button("📄 Generate Attendance Sheet", sheet, file_name=f"attendance-{record['date']}.csv", mime="text/csv", use_container_width=True, key="download_attendance_sheet")
+        st.caption("The absent list above includes a copy control for WhatsApp, email, or your school system.")
+
+    if st.session_state.attendance_records:
+        st.markdown("### Recent Attendance")
+        for history_record in reversed(st.session_state.attendance_records[-5:]):
+            formatted_date = date.fromisoformat(history_record["date"]).strftime("%d %b")
+            st.markdown(f"**{formatted_date}** — {history_record['subject']} — {history_record['present_count']}/{len(history_record['students'])}")
+        total_students = sum(len(item["students"]) for item in st.session_state.attendance_records)
+        total_present = sum(item["present_count"] for item in st.session_state.attendance_records)
+        student_absences = {}
+        student_totals = {}
+        for history_record in st.session_state.attendance_records:
+            for student in history_record["students"]:
+                student_totals[student["name"]] = student_totals.get(student["name"], 0) + 1
+                if not student["present"]:
+                    student_absences[student["name"]] = student_absences.get(student["name"], 0) + 1
+        average = total_present / total_students * 100 if total_students else 0
+        most_absent = max(student_absences, key=student_absences.get) if student_absences else "None yet"
+        below_75 = sum(1 for name, total in student_totals.items() if student_absences.get(name, 0) / total > 0.25)
+        st.markdown("### Class Attendance Insights")
+        insight_columns = st.columns(3, gap="small")
+        insight_columns[0].metric("Average attendance", f"{average:.1f}%")
+        insight_columns[1].metric("Most absent", most_absent)
+        insight_columns[2].metric("Students below 75%", below_75)
+
+
+def class_copilot_page():
+    st.markdown('<h2 class="tool-header">🎤 Class Copilot</h2>', unsafe_allow_html=True)
+    topic = st.text_input("What is the class about?", placeholder="I have a 40-minute class on photosynthesis.", key="copilot_topic")
+    if st.button("Generate class flow", type="primary", use_container_width=True, key="generate_copilot"):
+        if not topic.strip():
+            st.warning("Add a class topic first.")
+        else:
+            content = f"# Class Copilot · {topic.strip()}\n\n0–5 min · Warm-up question\n\n5–15 min · Concept explanation\n\n15–25 min · Interactive activity\n\n25–35 min · Student questions\n\n35–40 min · Quick assessment"
+            st.session_state.generated_content["copilot"] = content
+    if st.session_state.generated_content.get("copilot"):
+        st.markdown(st.session_state.generated_content["copilot"])
+        content_actions("Class copilot", st.session_state.generated_content["copilot"], "copilot")
+
+
+def presentation_page():
+    st.markdown('<h2 class="tool-header">🖥️ Presentation Mode</h2>', unsafe_allow_html=True)
+    source = st.session_state.generated_content.get("lesson") or st.session_state.generated_content.get("copilot")
+    if not source:
+        st.info("Generate a lesson plan or Class Copilot flow first.")
+        return
+    slides = [line.strip("# ") for line in source.splitlines() if line.strip()][:5]
+    index = min(st.session_state.get("presentation_index", 0), len(slides) - 1)
+    st.markdown(f'<div class="glass-card presentation-slide"><div class="eyebrow">Slide {index + 1} of {len(slides)}</div><h2>{slides[index]}</h2><p>One concept at a time. Explain it, ask a question, then move forward.</p></div>', unsafe_allow_html=True)
+    previous, next_slide = st.columns(2, gap="small")
+    with previous:
+        if st.button("← Previous", disabled=index == 0, use_container_width=True, key="presentation_previous"):
+            st.session_state.presentation_index = index - 1
+            st.rerun()
+    with next_slide:
+        if st.button("Next →", disabled=index == len(slides) - 1, use_container_width=True, key="presentation_next"):
+            st.session_state.presentation_index = index + 1
+            st.rerun()
 
 
 def home_page():
@@ -638,18 +982,25 @@ def student_page():
     page_header("Student Dashboard", "Learn clearly, practice deliberately, and turn weak areas into the next step.")
     st.markdown('<div class="dashboard-shell">', unsafe_allow_html=True)
     st.markdown("### Quick start\nChoose a focused tool and keep the whole learning loop in one place.")
-    student_tabs = st.tabs(["💬 Doubt", "🧠 Study", "📝 Quiz", "📚 Summary", "📊 Progress", "⭐ Saved"])
+    learning_status()
+    student_tabs = st.tabs(["💬 Doubt", "📦 Learning Pack", "🧠 Study", "📝 Quiz", "🃏 Flashcards", "🗺️ Map", "⚡ Challenge", "📊 Progress", "⭐ Saved"])
     with student_tabs[0]:
         doubt_page()
     with student_tabs[1]:
-        study_page()
+        learning_pack_page()
     with student_tabs[2]:
-        quiz_page()
+        study_page()
     with student_tabs[3]:
-        summarizer_page()
+        quiz_page()
     with student_tabs[4]:
-        progress_page()
+        flashcard_page()
     with student_tabs[5]:
+        knowledge_map_page()
+    with student_tabs[6]:
+        quick_challenge_page()
+    with student_tabs[7]:
+        progress_page()
+    with student_tabs[8]:
         saved_page()
     st.session_state.embedded_feature = False
     st.markdown('</div>', unsafe_allow_html=True)
@@ -660,16 +1011,23 @@ def teacher_page():
     page_header("Teacher Dashboard", "Plan, create, and refine classroom material without leaving the workspace.")
     st.markdown('<div class="dashboard-shell">', unsafe_allow_html=True)
     st.markdown("### Classroom toolkit\nGenerate the core materials for one topic, then save or download what is ready.")
-    teacher_tabs = st.tabs(["📋 Lesson Plan", "📝 Quiz", "💡 Activity", "📊 Overview", "⭐ Saved"])
+    st.markdown('<article class="glass-card feature-card attendance-card"><div class="card-number">01</div><h3>📋 Quick Attendance</h3><p>Take attendance in seconds. Load a class, tap absent students, and download the sheet.</p></article>', unsafe_allow_html=True)
+    teacher_tabs = st.tabs(["📋 Quick Attendance", "🎤 Class Copilot", "📋 Lesson Plan", "📝 Quiz", "💡 Activity", "🖥️ Presentation", "📊 Overview", "⭐ Saved"])
     with teacher_tabs[0]:
-        lesson_page()
+        quick_attendance_page()
     with teacher_tabs[1]:
-        quiz_page()
+        class_copilot_page()
     with teacher_tabs[2]:
-        activities_page()
+        lesson_page()
     with teacher_tabs[3]:
-        progress_page()
+        quiz_page()
     with teacher_tabs[4]:
+        activities_page()
+    with teacher_tabs[5]:
+        presentation_page()
+    with teacher_tabs[6]:
+        progress_page()
+    with teacher_tabs[7]:
         saved_page()
     st.session_state.embedded_feature = False
     st.markdown('</div>', unsafe_allow_html=True)
@@ -678,14 +1036,22 @@ def teacher_page():
 def doubt_page():
     page_header("Doubt Solver", "Ask one clear question, choose the depth, and build understanding from the answer.")
     topic = st.text_area("What do you want to understand?", placeholder="Explain Newton's Laws simply.", height=110, key="doubt_input")
+    tutor_mode = st.radio("Tutor mode", ["Direct Answer", "Socratic Tutor"], horizontal=True, key="tutor_mode")
     level = st.selectbox("Explanation style", ["Explain like I'm 10", "Beginner", "Standard", "Advanced"], key="doubt_level")
     if st.button("Explain", type="primary", use_container_width=True):
         if not topic.strip():
             st.warning("Enter a question or topic first.")
+        elif tutor_mode == "Socratic Tutor":
+            st.session_state.socratic_topic = topic.strip()
+            st.session_state.socratic_step = 0
+            st.session_state.generated_content["doubt"] = socratic_response(topic.strip(), 0)
         else:
             st.session_state.generated_content["doubt"] = explain_topic(topic.strip(), level)
             st.session_state.chat_messages.append(("You", topic.strip()))
             st.session_state.chat_messages.append(("Zyphron", st.session_state.generated_content["doubt"]))
+    if tutor_mode == "Socratic Tutor" and st.session_state.socratic_topic and st.button("Continue Tutor", use_container_width=True, key="continue_socratic"):
+        st.session_state.socratic_step = min(st.session_state.socratic_step + 1, 2)
+        st.session_state.generated_content["doubt"] = socratic_response(st.session_state.socratic_topic, st.session_state.socratic_step)
     quick_columns = st.columns(4, gap="small")
     for column, label, suffix in zip(quick_columns, ["Explain simpler", "Give example", "Give analogy", "Summarize"], ["Beginner", "Standard", "Explain like I'm 10", "Standard"]):
         with column:
@@ -703,6 +1069,8 @@ def doubt_page():
 
 def quiz_page():
     page_header("Quiz Studio", "Generate a short practice set, see why answers are right, and retry the weak area.")
+    if st.session_state.weak_topics:
+        st.markdown(f'<div class="flow-note"><strong>Adaptive recommendation:</strong> Your next targeted practice is {st.session_state.weak_topics[-1]}. We will start with an easier set.</div>', unsafe_allow_html=True)
     setup_columns = st.columns([2, 1, 1, 1], gap="small")
     with setup_columns[0]:
         topic = st.text_input("Topic", placeholder="e.g. Newton's Laws", key="quiz_topic")
@@ -717,7 +1085,9 @@ def quiz_page():
         if not topic.strip():
             st.warning("Enter a topic before generating the quiz.")
         else:
-            st.session_state.quiz_data = {"topic": topic.strip(), "difficulty": difficulty, "questions": build_quiz(topic.strip(), difficulty, count)}
+            selected_topic = topic.strip() or st.session_state.weak_topics[-1] if st.session_state.weak_topics else topic.strip()
+            selected_difficulty = "Beginner" if st.session_state.weak_topics else difficulty
+            st.session_state.quiz_data = {"topic": selected_topic, "difficulty": selected_difficulty, "questions": build_quiz(selected_topic, selected_difficulty, count)}
             st.session_state.quiz_results = None
             st.rerun()
     quiz = st.session_state.quiz_data
@@ -742,6 +1112,8 @@ def quiz_page():
         weak = quiz["topic"] if results["correct"] < results["total"] else "None detected"
         st.success(f"Score: {results['correct']} / {results['total']}")
         st.metric("Weak topic", weak)
+        if weak != "None detected":
+            st.warning(f"Recommended action: Review {weak}, then attempt three easier targeted questions.")
         for index, item in enumerate(quiz["questions"]):
             answer = results["answers"][index]
             expected = item["options"][item["answer"]]
