@@ -15,6 +15,20 @@ if "previous_page" not in st.session_state:
     st.session_state.previous_page = "Home"
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
+if "saved_content" not in st.session_state:
+    st.session_state.saved_content = []
+if "quiz_data" not in st.session_state:
+    st.session_state.quiz_data = None
+if "quiz_results" not in st.session_state:
+    st.session_state.quiz_results = None
+if "quiz_history" not in st.session_state:
+    st.session_state.quiz_history = []
+if "study_session" not in st.session_state:
+    st.session_state.study_session = None
+if "study_step" not in st.session_state:
+    st.session_state.study_step = 0
+if "generated_content" not in st.session_state:
+    st.session_state.generated_content = {}
 
 
 def go_to(page):
@@ -29,6 +43,50 @@ def go_back():
 def select_mode(mode):
     st.session_state.mode = mode
     go_to("Teacher" if mode == "Teacher" else "Student")
+
+
+def save_content(title, content, category):
+    st.session_state.saved_content.append({"title": title, "content": content, "category": category})
+
+
+def content_actions(title, content, category):
+    action_columns = st.columns(3, gap="small")
+    with action_columns[0]:
+        st.download_button("Download", content, file_name=f"{title.lower().replace(' ', '-')}.txt", use_container_width=True, key=f"download_{category}_{title}")
+    with action_columns[1]:
+        if st.button("Save", use_container_width=True, key=f"save_{category}_{title}"):
+            save_content(title, content, category)
+            st.success("Saved to your library.")
+    with action_columns[2]:
+        st.code(content, language=None)
+
+
+def explain_topic(topic, level):
+    level_intro = {
+        "Explain like I'm 10": "Imagine it as a simple story: ",
+        "Beginner": "Let's start with the main idea: ",
+        "Standard": "The core idea is: ",
+        "Advanced": "At a deeper level, the key principle is: ",
+    }[level]
+    return (f"### {topic}\n\n{level_intro}{topic} is easier to understand when we connect its definition to a real situation. "
+            f"Break it into three parts: identify the main idea, observe how the parts interact, and test the idea with an example.\n\n"
+            f"**Example:** Consider a familiar situation involving {topic}. First describe what changes, then explain why it changes, and finally predict what happens next.\n\n"
+            f"**Quick check:** Can you explain {topic} in one sentence and give one example from everyday life?")
+
+
+def build_quiz(topic, difficulty, count):
+    templates = [
+        (f"Which statement best describes {topic}?", [f"It explains a key idea in {topic}", "It is unrelated to learning", "It only applies to one person", "It has no observable examples"], 0),
+        (f"What is a useful first step when studying {topic}?", ["Memorize without context", f"Define the main idea of {topic}", "Skip every example", "Avoid questions"], 1),
+        (f"Which action shows understanding of {topic}?", ["Repeating a title", "Guessing randomly", "Explaining it with an example", "Leaving it blank"], 2),
+        (f"How can you strengthen a weak area in {topic}?", ["Retry a similar question and review the reason", "Stop practicing", "Change the subject immediately", "Ignore feedback"], 0),
+        (f"What makes a summary of {topic} useful?", ["It includes every word", "It highlights key ideas and examples", "It has no structure", "It avoids important terms"], 1),
+    ]
+    return [{"question": q, "options": options, "answer": answer, "topic": topic} for q, options, answer in templates[:count]]
+
+
+def record_quiz_result(topic, score, total):
+    st.session_state.quiz_history.append({"topic": topic, "score": score, "total": total})
 
 
 st.markdown(
@@ -94,7 +152,7 @@ st.markdown(
         position: relative;
         z-index: 1;
         max-width: 1180px;
-        padding: 1.7rem 2.2rem 2rem;
+        padding: 1.4rem clamp(1rem, 3vw, 2.2rem) 2rem;
     }
 
     .brand-bar {
@@ -102,7 +160,7 @@ st.markdown(
         align-items: center;
         justify-content: space-between;
         gap: 1rem;
-        margin-bottom: 4.5rem;
+        margin-bottom: 3rem;
     }
 
     .brand {
@@ -217,7 +275,9 @@ st.markdown(
     }
 
     .stButton > button {
-        min-height: 3rem;
+        width: 100%;
+        min-height: 2.8rem;
+        padding: 0.65rem 1rem;
         border: 1px solid rgba(233, 220, 255, 0.24);
         border-radius: 0.8rem;
         color: #fff;
@@ -227,6 +287,19 @@ st.markdown(
         box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.15);
         backdrop-filter: blur(15px);
         transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+    }
+
+    .stButton > button p {
+        white-space: normal;
+        overflow-wrap: anywhere;
+        line-height: 1.25;
+    }
+
+    .stTextInput input,
+    .stTextArea textarea,
+    [data-baseweb="select"] > div {
+        min-height: 2.8rem;
+        font-size: 1rem;
     }
 
     .stButton > button:hover {
@@ -350,7 +423,7 @@ st.markdown(
     }
 
     .nav-shell {
-        margin: -2.2rem 0 3.2rem;
+        margin: -1rem 0 2.5rem;
         padding: 0.55rem;
         border: 1px solid var(--line);
         border-radius: 1rem;
@@ -381,6 +454,35 @@ st.markdown(
         margin: 0 0 2rem;
         color: var(--muted);
         line-height: 1.7;
+    }
+
+    .dashboard-shell {
+        margin-bottom: 2.5rem;
+        padding: clamp(1rem, 2.5vw, 1.7rem);
+        border: 1px solid var(--line);
+        border-radius: 1.1rem;
+        background: rgba(255, 255, 255, 0.045);
+        box-shadow: 0 14px 35px rgba(3, 0, 16, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(15px);
+    }
+
+    .dashboard-shell [data-baseweb="tab-list"] {
+        gap: 0.35rem;
+        flex-wrap: wrap;
+    }
+
+    .dashboard-shell [data-baseweb="tab"] {
+        min-height: 2.7rem;
+        padding: 0.55rem 0.8rem;
+        color: var(--muted);
+        white-space: normal;
+    }
+
+    .tool-header {
+        margin: 0.5rem 0 1.1rem;
+        color: var(--ink);
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 1.35rem;
     }
 
     .feature-card {
@@ -423,15 +525,19 @@ st.markdown(
     }
 
     @media (max-width: 640px) {
-        .block-container { padding: 1.15rem 1rem 1.5rem; }
-        .brand-bar { margin-bottom: 3.5rem; }
+        .block-container { padding: 1rem 0.8rem 1.5rem; }
+        .brand-bar { margin-bottom: 2rem; }
         .language-pill { font-size: 0.68rem; }
         .hero { margin-bottom: 4.4rem; }
-        .hero h1 { font-size: clamp(3.7rem, 19vw, 5.8rem); }
+        .hero h1 { font-size: clamp(3.2rem, 17vw, 5.2rem); }
         .hero p { font-size: 0.92rem; }
         .section-block { margin-bottom: 4.4rem; }
         .glass-card { min-height: 0; }
-        .nav-shell { margin-top: -1.9rem; margin-bottom: 2.5rem; }
+        .nav-shell { margin-top: -0.8rem; margin-bottom: 1.8rem; padding: 0.35rem; }
+        .nav-caption { padding-left: 0.4rem; }
+        .nav-shell .stButton > button { min-height: 2.6rem; padding: 0.5rem 0.35rem; font-size: 0.78rem; }
+        .dashboard-shell { padding: 0.85rem; }
+        .dashboard-shell [data-baseweb="tab"] { flex: 1 1 45%; text-align: center; }
     }
     </style>
     """,
@@ -452,9 +558,6 @@ navigation = [
     ("🏠 Home", "Home"),
     ("🎓 Student", "Student"),
     ("👨‍🏫 Teacher", "Teacher"),
-    ("💬 Chat", "Chat"),
-    ("📝 Quiz", "Quiz"),
-    ("📚 Lessons", "Lesson Planner"),
     ("ℹ️ About", "About"),
 ]
 st.markdown('<div class="nav-shell"><div class="nav-caption">Explore Zyphron</div>', unsafe_allow_html=True)
@@ -466,11 +569,12 @@ st.markdown("</div>", unsafe_allow_html=True)
 
 
 def page_header(title, description):
-    back_column, home_column = st.columns([1, 1], gap="small")
-    with back_column:
-        st.button("← Back", key=f"back_{title}", use_container_width=True, on_click=go_back, disabled=st.session_state.page == "Home")
-    with home_column:
-        st.button("⌂ Home", key=f"home_{title}", use_container_width=True, on_click=go_to, args=("Home",))
+    if not st.session_state.get("embedded_feature"):
+        back_column, home_column = st.columns([1, 1], gap="small")
+        with back_column:
+            st.button("← Back", key=f"back_{title}", use_container_width=True, on_click=go_back, disabled=st.session_state.page == "Home")
+        with home_column:
+            st.button("⌂ Home", key=f"home_{title}", use_container_width=True, on_click=go_to, args=("Home",))
     st.markdown(f'<h1 class="page-title">{title}</h1><p class="page-intro">{description}</p>', unsafe_allow_html=True)
 
 
@@ -480,11 +584,6 @@ def feature_card(number, title, description, action_label, target_page):
         unsafe_allow_html=True,
     )
     st.button(action_label, key=f"action_{target_page}_{number}", use_container_width=True, on_click=go_to, args=(target_page,))
-
-
-def add_chat_response(prompt):
-    st.session_state.chat_messages.append(("You", prompt))
-    st.session_state.chat_messages.append(("Zyphron", f"Here is a clear starting point for: {prompt}. I can explain it step by step, add an example, or turn it into a short quiz."))
 
 
 def home_page():
@@ -506,7 +605,7 @@ def home_page():
     with lesson_column:
         st.button("Create Lesson", use_container_width=True, on_click=go_to, args=("Teacher",))
     with doubt_column:
-        st.button("Ask a Doubt", use_container_width=True, on_click=go_to, args=("Chat",))
+        st.button("Ask a Doubt", use_container_width=True, on_click=go_to, args=("Doubt Solver",))
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<section class="section-block"><h2 class="section-heading">The <span>Challenge</span></h2><p class="section-lead">Small frictions can make learning feel much harder than it needs to be.</p>', unsafe_allow_html=True)
@@ -535,83 +634,284 @@ def home_page():
 
 
 def student_page():
-    page_header("Student Space", "Choose a focused next step for learning, practice, and progress.")
-    cards = [
-        ("01", "💬 Ask a Doubt", "Get a clear, step-by-step explanation.", "Open Chat", "Chat"),
-        ("02", "📝 Take a Quiz", "Practice concepts with quick questions.", "Take Quiz", "Quiz"),
-        ("03", "📖 Learn a Topic", "Build a focused learning path.", "Open Lessons", "Lesson Planner"),
-        ("04", "📊 View Progress", "Review your learning journey.", "View Progress", "About"),
-    ]
-    columns = st.columns(4, gap="medium")
-    for column, card in zip(columns, cards):
-        with column:
-            feature_card(*card)
+    st.session_state.embedded_feature = True
+    page_header("Student Dashboard", "Learn clearly, practice deliberately, and turn weak areas into the next step.")
+    st.markdown('<div class="dashboard-shell">', unsafe_allow_html=True)
+    st.markdown("### Quick start\nChoose a focused tool and keep the whole learning loop in one place.")
+    student_tabs = st.tabs(["💬 Doubt", "🧠 Study", "📝 Quiz", "📚 Summary", "📊 Progress", "⭐ Saved"])
+    with student_tabs[0]:
+        doubt_page()
+    with student_tabs[1]:
+        study_page()
+    with student_tabs[2]:
+        quiz_page()
+    with student_tabs[3]:
+        summarizer_page()
+    with student_tabs[4]:
+        progress_page()
+    with student_tabs[5]:
+        saved_page()
+    st.session_state.embedded_feature = False
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def teacher_page():
-    page_header("Teacher Studio", "Turn a classroom idea into useful material in a few focused clicks.")
-    cards = [
-        ("01", "⚡ Generate Lesson Plan", "Shape a topic into a ready-to-use lesson.", "Plan a Lesson", "Lesson Planner"),
-        ("02", "📝 Create Quiz", "Build a short quiz for your class.", "Create Quiz", "Quiz"),
-        ("03", "💡 Explain a Topic", "Prepare a student-friendly explanation.", "Explain Topic", "Chat"),
-        ("04", "📚 Teaching Resources", "Find a focused starting point for class.", "Open Resources", "About"),
-    ]
-    columns = st.columns(4, gap="medium")
-    for column, card in zip(columns, cards):
-        with column:
-            feature_card(*card)
+    st.session_state.embedded_feature = True
+    page_header("Teacher Dashboard", "Plan, create, and refine classroom material without leaving the workspace.")
+    st.markdown('<div class="dashboard-shell">', unsafe_allow_html=True)
+    st.markdown("### Classroom toolkit\nGenerate the core materials for one topic, then save or download what is ready.")
+    teacher_tabs = st.tabs(["📋 Lesson Plan", "📝 Quiz", "💡 Activity", "📊 Overview", "⭐ Saved"])
+    with teacher_tabs[0]:
+        lesson_page()
+    with teacher_tabs[1]:
+        quiz_page()
+    with teacher_tabs[2]:
+        activities_page()
+    with teacher_tabs[3]:
+        progress_page()
+    with teacher_tabs[4]:
+        saved_page()
+    st.session_state.embedded_feature = False
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
-def chat_page():
-    page_header("Chat / Doubt Solver", "Ask a question and keep the conversation moving without losing context.")
-    mode = st.session_state.mode or "Student"
-    st.markdown(f'<div class="mode-note">Current mode: <strong>{mode}</strong> · English</div>', unsafe_allow_html=True)
-    if not st.session_state.chat_messages:
-        st.markdown('<div class="chat-box"><span class="chat-label">Zyphron</span>Welcome. Ask a question, paste a topic, or choose a quick prompt below.</div>', unsafe_allow_html=True)
-    for sender, message in st.session_state.chat_messages:
-        st.markdown(f'<div class="chat-box"><span class="chat-label">{sender}</span>{message}</div>', unsafe_allow_html=True)
-    prompt_columns = st.columns(4, gap="small")
-    for column, prompt in zip(prompt_columns, ["Explain this simply", "Give an example", "Quiz me", "Summarize this"]):
+def doubt_page():
+    page_header("Doubt Solver", "Ask one clear question, choose the depth, and build understanding from the answer.")
+    topic = st.text_area("What do you want to understand?", placeholder="Explain Newton's Laws simply.", height=110, key="doubt_input")
+    level = st.selectbox("Explanation style", ["Explain like I'm 10", "Beginner", "Standard", "Advanced"], key="doubt_level")
+    if st.button("Explain", type="primary", use_container_width=True):
+        if not topic.strip():
+            st.warning("Enter a question or topic first.")
+        else:
+            st.session_state.generated_content["doubt"] = explain_topic(topic.strip(), level)
+            st.session_state.chat_messages.append(("You", topic.strip()))
+            st.session_state.chat_messages.append(("Zyphron", st.session_state.generated_content["doubt"]))
+    quick_columns = st.columns(4, gap="small")
+    for column, label, suffix in zip(quick_columns, ["Explain simpler", "Give example", "Give analogy", "Summarize"], ["Beginner", "Standard", "Explain like I'm 10", "Standard"]):
         with column:
-            st.button(prompt, key=f"prompt_{prompt}", use_container_width=True, on_click=add_chat_response, args=(prompt,))
-    user_prompt = st.chat_input("Ask a doubt or enter a topic...")
-    if user_prompt:
-        add_chat_response(user_prompt)
-        st.rerun()
+            if st.button(label, use_container_width=True, key=f"quick_{label}") and topic.strip():
+                st.session_state.generated_content["doubt"] = explain_topic(topic.strip(), suffix)
+    response = st.session_state.generated_content.get("doubt")
+    if response:
+        st.markdown('<div class="chat-box">', unsafe_allow_html=True)
+        st.markdown(response)
+        st.markdown('</div>', unsafe_allow_html=True)
+        content_actions("Doubt explanation", response, "doubt")
+    elif not topic.strip():
+        st.info("Try the Newton's Laws prompt above to follow the 3-minute demo flow.")
 
 
 def quiz_page():
-    page_header("Quiz Studio", "Create a quick practice set for a topic, then keep learning from the results.")
-    topic = st.text_input("Topic", placeholder="e.g. Photosynthesis")
-    level = st.selectbox("Level", ["Foundations", "Practice", "Challenge"])
-    if st.button("Generate Quiz", use_container_width=True):
-        selected_topic = topic.strip() or "your selected topic"
-        st.markdown(f'<div class="flow-note"><strong>{level} quiz: {selected_topic}</strong><br><br>1. What is the central idea of {selected_topic}?<br>2. Give one real-world example.<br>3. Explain it in your own words.<br><br>Use Chat to explore any answer.</div>', unsafe_allow_html=True)
+    page_header("Quiz Studio", "Generate a short practice set, see why answers are right, and retry the weak area.")
+    setup_columns = st.columns([2, 1, 1, 1], gap="small")
+    with setup_columns[0]:
+        topic = st.text_input("Topic", placeholder="e.g. Newton's Laws", key="quiz_topic")
+    with setup_columns[1]:
+        difficulty = st.selectbox("Difficulty", ["Beginner", "Standard", "Advanced"], key="quiz_difficulty")
+    with setup_columns[2]:
+        count = st.selectbox("Questions", [3, 4, 5], key="quiz_count")
+    with setup_columns[3]:
+        st.markdown("<br>", unsafe_allow_html=True)
+        generate = st.button("Generate", type="primary", use_container_width=True)
+    if generate:
+        if not topic.strip():
+            st.warning("Enter a topic before generating the quiz.")
+        else:
+            st.session_state.quiz_data = {"topic": topic.strip(), "difficulty": difficulty, "questions": build_quiz(topic.strip(), difficulty, count)}
+            st.session_state.quiz_results = None
+            st.rerun()
+    quiz = st.session_state.quiz_data
+    if not quiz:
+        st.info("Your generated quiz will appear here. Keep it short so feedback stays useful.")
+        return
+    st.markdown(f"### {quiz['topic']} · {quiz['difficulty']}")
+    if st.session_state.quiz_results is None:
+        for index, item in enumerate(quiz["questions"]):
+            st.radio(item["question"], item["options"], key=f"quiz_answer_{index}", index=None)
+        if st.button("Submit Quiz", type="primary", use_container_width=True):
+            unanswered = [index for index in range(len(quiz["questions"])) if f"quiz_answer_{index}" not in st.session_state]
+            if any(st.session_state.get(f"quiz_answer_{index}") is None for index in range(len(quiz["questions"]))):
+                st.warning("Answer every question before submitting.")
+            else:
+                correct = sum(st.session_state[f"quiz_answer_{index}"] == item["options"][item["answer"]] for index, item in enumerate(quiz["questions"]))
+                st.session_state.quiz_results = {"correct": correct, "total": len(quiz["questions"]), "answers": [st.session_state[f"quiz_answer_{index}"] for index in range(len(quiz["questions"]))]}
+                record_quiz_result(quiz["topic"], correct, len(quiz["questions"]))
+                st.rerun()
+    else:
+        results = st.session_state.quiz_results
+        weak = quiz["topic"] if results["correct"] < results["total"] else "None detected"
+        st.success(f"Score: {results['correct']} / {results['total']}")
+        st.metric("Weak topic", weak)
+        for index, item in enumerate(quiz["questions"]):
+            answer = results["answers"][index]
+            expected = item["options"][item["answer"]]
+            icon = "✅" if answer == expected else "❌"
+            st.markdown(f"**{icon} {index + 1}. {item['question']}**\n\nYour answer: {answer}\n\nExplanation: The best answer is **{expected}** because it connects the concept to observable understanding.")
+        result_text = f"{quiz['topic']} quiz\nScore: {results['correct']} / {results['total']}\nWeak topic: {weak}"
+        content_actions(f"{quiz['topic']} quiz result", result_text, "quiz-result")
+        if st.button("Retry Quiz", use_container_width=True):
+            st.session_state.quiz_results = None
+            for index in range(len(quiz["questions"])):
+                st.session_state.pop(f"quiz_answer_{index}", None)
+            st.rerun()
+
+
+def study_page():
+    page_header("Study Mode", "Turn a time limit into a simple session you can actually complete.")
+    request = st.text_input("What do you want to learn and how much time do you have?", placeholder="I have 30 minutes to learn Newton's Laws", key="study_request")
+    if st.button("Build Study Plan", type="primary", use_container_width=True):
+        if not request.strip():
+            st.warning("Describe a topic and your available time first.")
+        else:
+            import re
+            minutes_match = re.search(r"(\d+)\s*(?:minutes?|mins?)", request.lower())
+            minutes = int(minutes_match.group(1)) if minutes_match else 30
+            topic = re.sub(r"i have\s+\d+\s*(?:minutes?|mins?)\s*(?:to learn)?", "", request, flags=re.IGNORECASE).strip(" .") or "your topic"
+            first = max(1, minutes // 6)
+            second = max(1, minutes // 3)
+            third = max(1, minutes // 3)
+            final = max(1, minutes - first - second - third)
+            st.session_state.study_session = {"topic": topic, "minutes": minutes, "steps": [(f"0–{first} min", "Concept introduction", f"Define {topic} and identify the one idea everything else depends on."), (f"{first}–{first + second} min", "Explanation + examples", f"Study two examples of {topic}, then explain the pattern in your own words."), (f"{first + second}–{first + second + third} min", "Interactive questions", "Take a short quiz and mark every answer you had to guess."), (f"{minutes - final}–{minutes} min", "Revision + weak areas", "Review missed questions and write a one-sentence takeaway.")]}
+            st.session_state.study_step = 0
+            st.rerun()
+    session = st.session_state.study_session
+    if not session:
+        st.info("Example: I have 30 minutes to learn Newton's Laws.")
+        return
+    st.markdown(f"### {session['minutes']}-Minute Study Plan · {session['topic']}")
+    progress = (st.session_state.study_step + 1) / len(session["steps"])
+    st.progress(progress)
+    for index, (time, title, detail) in enumerate(session["steps"]):
+        marker = "→" if index == st.session_state.study_step else "○"
+        st.markdown(f"**{marker} {time} · {title}**  \n{detail}")
+    control_columns = st.columns(4, gap="small")
+    with control_columns[0]:
+        if st.button("Previous", disabled=st.session_state.study_step == 0, use_container_width=True):
+            st.session_state.study_step -= 1
+            st.rerun()
+    with control_columns[1]:
+        if st.button("Next", disabled=st.session_state.study_step == len(session["steps"]) - 1, use_container_width=True):
+            st.session_state.study_step += 1
+            st.rerun()
+    with control_columns[2]:
+        if st.button("Quiz Me", use_container_width=True):
+            st.session_state.quiz_data = {"topic": session["topic"], "difficulty": "Standard", "questions": build_quiz(session["topic"], "Standard", 3)}
+            st.session_state.quiz_results = None
+            go_to("Quiz")
+            st.rerun()
+    with control_columns[3]:
+        if st.button("Finish Session", use_container_width=True):
+            save_content(f"{session['topic']} study plan", "\n".join(f"{time} - {title}: {detail}" for time, title, detail in session["steps"]), "study")
+            st.success("Session complete. The plan is saved to your library.")
+
+
+def summarizer_page():
+    page_header("Topic Summarizer", "Turn a topic or study text into a compact revision sheet.")
+    topic = st.text_input("Topic", placeholder="e.g. Photosynthesis", key="summary_topic")
+    source = st.text_area("Optional study text", placeholder="Paste notes here for a more focused summary.", height=120, key="summary_source")
+    if st.button("Create Summary", type="primary", use_container_width=True):
+        if not topic.strip():
+            st.warning("Enter a topic first.")
+        else:
+            summary = f"### {topic.strip()}\n\n**Short summary**\n{topic.strip()} can be understood by defining its central process, connecting the main parts, and checking the result with an example.\n\n**Key concepts**\n- Main definition and purpose\n- Cause-and-effect relationship\n- One concrete example\n\n**Important points**\n- Start with the core vocabulary.\n- Link each step to what changes next.\n- Test your understanding without looking at the notes.\n\n**Quick revision**\nExplain {topic.strip()} in three sentences, then answer: What is the most important relationship?"
+            if source.strip():
+                summary += f"\n\n**Notes used**\nYour {len(source.split())}-word study text was used as context."
+            st.session_state.generated_content["summary"] = summary
+    if st.session_state.generated_content.get("summary"):
+        st.markdown(st.session_state.generated_content["summary"])
+        content_actions("Topic summary", st.session_state.generated_content["summary"], "summary")
 
 
 def lesson_page():
-    page_header("Lesson Planner", "Build a clean lesson outline that is ready to refine for your classroom.")
-    topic = st.text_input("Lesson topic", placeholder="e.g. The water cycle")
-    grade = st.selectbox("Class level", ["Primary", "Middle school", "Secondary"])
-    duration = st.selectbox("Duration", ["30 minutes", "45 minutes", "60 minutes"])
-    if st.button("Generate Lesson Plan", use_container_width=True):
-        selected_topic = topic.strip() or "your selected topic"
-        st.markdown(f'<div class="flow-note"><strong>{selected_topic} · {grade} · {duration}</strong><br><br>1. Warm-up question<br>2. Core explanation with one example<br>3. Guided activity<br>4. Quick understanding check<br>5. Takeaway and follow-up question</div>', unsafe_allow_html=True)
+    page_header("Lesson Planner", "Build a ready-to-refine classroom plan with objectives, activities, and assessment.")
+    columns = st.columns(2, gap="medium")
+    with columns[0]:
+        subject = st.text_input("Subject", placeholder="Physics", key="lesson_subject")
+        topic = st.text_input("Topic", placeholder="Newton's Laws", key="lesson_topic")
+        grade = st.selectbox("Class level", ["Primary", "Middle school", "Secondary", "College"], key="lesson_grade")
+    with columns[1]:
+        duration = st.selectbox("Duration", ["30 minutes", "45 minutes", "60 minutes", "90 minutes"], key="lesson_duration")
+        objective = st.text_area("Learning objective", placeholder="Students will explain how force changes motion.", key="lesson_objective", height=100)
+    if st.button("Generate Lesson Plan", type="primary", use_container_width=True):
+        if not subject.strip() or not topic.strip():
+            st.warning("Add a subject and topic before generating.")
+        else:
+            objective = objective.strip() or f"Students will explain the core ideas of {topic.strip()} using an example."
+            plan = f"# {subject.strip()} Lesson Plan\n\n**Topic:** {topic.strip()}\n**Level:** {grade}\n**Duration:** {duration}\n\n## Learning objectives\n- {objective}\n- Connect the concept to an everyday example.\n\n## Flow\n1. **Introduction (5 min):** Open with a question about {topic.strip()}.\n2. **Explanation:** Model the concept with a clear example and invite questions.\n3. **Activity:** Students work in pairs to explain the idea and compare answers.\n4. **Assessment:** Ask three checks for understanding and address the most common misconception.\n5. **Homework:** Write a short explanation and create one original example."
+            st.session_state.generated_content["lesson"] = plan
+    if st.session_state.generated_content.get("lesson"):
+        st.markdown(st.session_state.generated_content["lesson"])
+        content_actions("Lesson plan", st.session_state.generated_content["lesson"], "lesson")
+
+
+def activities_page():
+    page_header("Activity Generator", "Create a practical classroom activity or assignment around one topic.")
+    topic = st.text_input("Topic", placeholder="The water cycle", key="activity_topic")
+    level = st.selectbox("Student level", ["Primary", "Middle school", "Secondary"], key="activity_level")
+    duration = st.selectbox("Class duration", ["10 minutes", "20 minutes", "30 minutes", "45 minutes"], key="activity_duration")
+    if st.button("Generate Activity", type="primary", use_container_width=True):
+        if not topic.strip():
+            st.warning("Enter a topic first.")
+        else:
+            activity = f"# {topic.strip()} Classroom Activity\n\n**Level:** {level} · **Time:** {duration}\n\n**Activity:** Think, pair, explain\n\n1. Give each student one prompt about {topic.strip()}.\n2. Students write a prediction, compare it with a partner, and identify one difference.\n3. Pairs explain their reasoning to the class.\n4. Close with a two-question exit check.\n\n**Teacher look-for:** Listen for the key vocabulary and record misconceptions to revisit next lesson."
+            st.session_state.generated_content["activity"] = activity
+    if st.session_state.generated_content.get("activity"):
+        st.markdown(st.session_state.generated_content["activity"])
+        content_actions("Classroom activity", st.session_state.generated_content["activity"], "activity")
+
+
+def progress_page():
+    page_header("Learning Progress", "A transparent view of what has actually happened in this session.")
+    history = st.session_state.quiz_history
+    if not history:
+        st.info("No quiz history yet. Complete a quiz and your score, topics, and weak areas will appear here.")
+        return
+    total_questions = sum(item["total"] for item in history)
+    total_correct = sum(item["score"] for item in history)
+    metrics = st.columns(3)
+    metrics[0].metric("Quizzes completed", len(history))
+    metrics[1].metric("Average score", f"{total_correct / total_questions:.0%}")
+    metrics[2].metric("Topics studied", len({item['topic'] for item in history}))
+    st.markdown("### Recent activity")
+    for item in reversed(history):
+        status = "Strong" if item["score"] == item["total"] else "Review needed"
+        st.markdown(f"**{item['topic']}** · {item['score']}/{item['total']} · {status}")
+    st.markdown("### Next focus")
+    weak_topics = sorted({item["topic"] for item in history if item["score"] < item["total"]})
+    st.write(", ".join(weak_topics) if weak_topics else "No weak topics detected yet.")
+
+
+def saved_page():
+    page_header("Saved Content", "Keep useful explanations, quiz results, study plans, and teaching material nearby.")
+    if not st.session_state.saved_content:
+        st.info("Nothing saved yet. Use Save on any generated response to build your library.")
+        return
+    for index, item in enumerate(st.session_state.saved_content):
+        with st.expander(f"{item['title']} · {item['category']}"):
+            st.markdown(item["content"])
+            if st.button("Remove", key=f"remove_saved_{index}"):
+                st.session_state.saved_content.pop(index)
+                st.rerun()
 
 
 def about_page():
-    page_header("About Zyphron", "A focused education companion designed around the moments that matter most.")
-    st.markdown('<div class="glass-card"><div class="card-number">Z</div><h3>Clear support for real education work</h3><p>Zyphron helps teachers prepare lessons and quizzes, helps students work through doubts, and keeps every interaction simple, focused, and easy to demonstrate.</p></div>', unsafe_allow_html=True)
-    st.markdown('<div class="flow-note">Built for the future of education · Conclave 2026</div>', unsafe_allow_html=True)
+    page_header("About Zyphron", "One platform for the full loop: learn, practice, identify weakness, and teach.")
+    st.markdown('<div class="glass-card"><div class="card-number">Z</div><h3>Student → Learn → Practice → Improve</h3><p>Zyphron helps students turn a question into an explanation, a study plan, and measurable practice. Teachers can turn the same topic into a lesson and an activity.</p></div>', unsafe_allow_html=True)
 
 
 page_renderers = {
     "Home": home_page,
     "Student": student_page,
     "Teacher": teacher_page,
-    "Chat": chat_page,
+    "Doubt Solver": doubt_page,
+    "Chat": doubt_page,
     "Quiz": quiz_page,
+    "Study Mode": study_page,
+    "Summarizer": summarizer_page,
     "Lesson Planner": lesson_page,
+    "Activities": activities_page,
+    "Progress": progress_page,
+    "Saved": saved_page,
     "About": about_page,
 }
-page_renderers[st.session_state.page]()
+page_renderers.get(st.session_state.page, home_page)()
